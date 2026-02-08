@@ -24,7 +24,9 @@ public:
         const std::vector<size_t> &shape,
         llaisysDataType_t dtype,
         llaisysDeviceType_t device_type = LLAISYS_DEVICE_CPU,
-        int device = 0);
+        int device = 0
+    );
+    
     ~Tensor() = default;
     // Info
     std::byte *data();

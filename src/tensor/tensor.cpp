@@ -2,6 +2,7 @@
 
 #include "../utils.hpp"
 
+#include <cstddef>
 #include <cstring>
 #include <numeric>
 #include <sstream>
@@ -163,29 +164,82 @@ void Tensor::debug() const {
     }
 }
 
-bool Tensor::isContiguous() const {
-    TO_BE_IMPLEMENTED();
-    return true;
-}
-
-tensor_t Tensor::permute(const std::vector<size_t> &order) const {
-    TO_BE_IMPLEMENTED();
-    return std::shared_ptr<Tensor>(new Tensor(_meta, _storage));
-}
-
-tensor_t Tensor::view(const std::vector<size_t> &shape) const {
-    TO_BE_IMPLEMENTED();
-    return std::shared_ptr<Tensor>(new Tensor(_meta, _storage));
-}
-
-tensor_t Tensor::slice(size_t dim, size_t start, size_t end) const {
-    TO_BE_IMPLEMENTED();
-    return std::shared_ptr<Tensor>(new Tensor(_meta, _storage));
-}
-
+//src is source memory address, and in CPU 
 void Tensor::load(const void *src_) {
-    TO_BE_IMPLEMENTED();
+    if (this->deviceType() == LLAISYS_DEVICE_CPU) {
+        std::memcpy(this->data(), src_, this->numel() * this->elementSize());
+    } else {
+        core::context().setDevice(this->deviceType(), this->deviceId());
+        core::context().runtime().api()->memcpy_sync(
+            this->data(), src_, this->numel() * this->elementSize(), LLAISYS_MEMCPY_H2D);
+    }
 }
+
+bool Tensor::isContiguous() const {
+    if (this->ndim() == 0) {
+        return true;
+    }
+    // check if the strides are correct
+    for (size_t i = 0; i < this->ndim() - 1; i++) {
+        if (static_cast<size_t>(this->strides()[i]) != static_cast<size_t>(this->shape()[i + 1]) * static_cast<size_t>(this->strides()[i + 1])) {
+            return false;
+        }
+    }
+    return this->strides()[this->ndim() - 1] == 1; // last dimension is contiguous
+}
+
+//创建一个新张量视图，改变原始张量各个维度的顺序，但不移动底层数据，只是重排 shape 和 strides。 （i,j,k） -> (k,i,j) 
+//（i,j,k） -> (k,i,j) 只是使用的维度不一样而已，但是如果不需要该底层数据，只需要确保计算正确即可
+tensor_t Tensor::permute(const std::vector<size_t> &order) const {
+    size_t new_ndim = this->ndim();
+    std::vector<ptrdiff_t> new_strides(new_ndim);
+    std::vector<size_t> new_shape(new_ndim);
+    for (size_t i = 0; i < new_ndim; i++) {
+        new_shape[i] = this->shape()[order[i]];
+        new_strides[i] = this->strides()[order[i]];
+    }
+    TensorMeta new_meta{this->dtype(), std::move(new_shape), std::move(new_strides)};
+    return std::shared_ptr<Tensor>(new Tensor(std::move(new_meta), this->_storage, this->_offset));
+}
+
+//创建一个新的张量视图，改变shape，不改变底层数据存储，只是重新计算步长 
+tensor_t Tensor::view(const std::vector<size_t> &shape) const {
+    size_t old_numel = this->numel();
+    size_t new_numel = std::accumulate(shape.begin(), shape.end(), size_t(1), std::multiplies<size_t>());
+    CHECK_ARGUMENT(old_numel == new_numel, "view numel mismatch");
+
+    size_t new_ndim = shape.size();
+    std::vector<ptrdiff_t> new_strides(new_ndim);
+    size_t stride = 1;
+    if (this->isContiguous()) {
+        for (size_t i = 1; i <= new_ndim; i++) {
+            new_strides[new_ndim - i] = stride;
+            stride *= shape[new_ndim - i];
+        }
+    } else { // not contiguous, we need to calculate the strides manually
+        // todo
+    }
+
+    TensorMeta new_meta{this->dtype(), std::move(shape), std::move(new_strides)};
+    return std::shared_ptr<Tensor>(new Tensor(std::move(new_meta), this->_storage, this->_offset));
+}
+
+
+//切分一个 slice 出来，此时步长就会变得与 shpae 没有关系
+tensor_t Tensor::slice(size_t dim, size_t start, size_t end) const {
+    CHECK_ARGUMENT(dim < this->ndim(), "slice dim out of range");
+    CHECK_ARGUMENT(start < end, "slice start must be less than end");
+    CHECK_ARGUMENT(end <= this->shape()[dim], "slice end must be less than or equal to the dimension size");
+    std::vector<size_t> new_shape = this->shape();
+    std::vector<ptrdiff_t> new_strides = this->strides();
+    new_shape[dim] = end - start;
+
+    size_t offset = start * this->strides()[dim] * this->elementSize();
+    TensorMeta new_meta{this->dtype(), std::move(new_shape), std::move(new_strides)};
+    return std::shared_ptr<Tensor>(new Tensor(std::move(new_meta), this->_storage, this->_offset + offset));
+}
+
+
 
 tensor_t Tensor::contiguous() const {
     TO_BE_IMPLEMENTED();

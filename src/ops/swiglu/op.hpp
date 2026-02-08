@@ -1,5 +1,7 @@
 #pragma once
 
+#include "cpu/swiglu_cpu.hpp"
+
 #include "../../tensor/tensor.hpp"
 
 namespace llaisys::ops {
